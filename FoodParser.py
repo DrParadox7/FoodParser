@@ -12,7 +12,12 @@ logger = logging.getLogger('FoodParser')
 logging.basicConfig(filename='logs.info', level=logging.DEBUG)
 separator = '\n--------------------------'
 
-base_saturation = 0.6
+base_saturation = 0.2
+
+bonus_smelting = 2
+bonus_saturation = 0.6
+incompatible_with_saturation_bonus = ["smelting", "inheritance"]
+
 entry_count = 0
 
 cached_progress = 0
@@ -130,17 +135,10 @@ def process_saturation_entries(json_data, iterations):
                 if isinstance(entry['saturationModifier'], list):
 
                     if all(isinstance(element, float) for element in entry['saturationModifier']):
-                        Bonus = base_saturation
 
-                        # If it is a smelting process we do not give bonuses
-                        if -1.0 in entry['saturationModifier']:
-                            entry['saturationModifier'].remove(-1.0)
-                            Bonus = 0
+                        Bonus = bonus_saturation if not ('type' in entry and entry['type'] in incompatible_with_saturation_bonus) else 0
 
-                        # average_saturation_modifier = sum()/len(entry['saturationModifier'])
-                        # entry['saturationModifier'] = round(average_saturation_modifier + Bonus, 1)
-
-                        entry['saturationModifier'] = round(max(entry['saturationModifier']) + Bonus, 1)
+                        entry['saturationModifier'] = max(round(max(entry['saturationModifier']) + Bonus, 1), base_saturation)
 
                         processed_entries_saturation += 1
 
@@ -167,11 +165,13 @@ def process_hunger_entries(json_data, iterations):
                 if all(isinstance(element, int) for element in entry['hunger']):
                     # Sum hunger entries
                     hunger_modifier = 1 if 'hungerModifier' not in entry else entry['hungerModifier']
-                    sum_hunger = sum(entry['hunger'])
+                    hunger_bonus = bonus_smelting if 'type' in entry and entry['type'] == 'smelting' else 0
+
+                    value_hunger = sum(entry['hunger']) + hunger_bonus
 
                     # We want entries with a value of exactly 0 to remain 0
                     # else we give it a minimum of 1
-                    entry['hunger'] = max(int(sum_hunger * hunger_modifier), 1) if not sum_hunger == 0 else 0
+                    entry['hunger'] = max(int(value_hunger * hunger_modifier), 1) if not value_hunger == 0 else 0
 
                     processed_entries_hunger += 1
 
@@ -245,12 +245,16 @@ def process_food_groups(json_data, iterations):
 
         # Process additions or deletions
         for entry in entries:
-            if 'appendGroups' in entry:
-                if isinstance(entry['appendGroups'], list):
-                    entry['foodGroups'] = list(set(entry['foodGroups'] + entry['appendGroups']))
-            if 'removeGroups' in entry:
-                if isinstance(entry['removeGroups'], list):
-                    entry['foodGroups'] = list(filter(lambda x: x not in entry['removeGroups'], entry['foodGroups']))
+            if 'foodGroups' in entry:
+                if 'appendGroups' in entry:
+                    if isinstance(entry['appendGroups'], list):
+                        entry['foodGroups'] = list(set(entry['foodGroups'] + entry['appendGroups']))
+                if 'removeGroups' in entry:
+                    if isinstance(entry['removeGroups'], list):
+                        entry['foodGroups'] = list(
+                            filter(lambda x: x not in entry['removeGroups'], entry['foodGroups']))
+                # Make it tidy
+                entry['foodGroups'] = sorted(entry['foodGroups'])
 
     logger.info(f'Processed {processed_group_food} food group entries this cycle.')
 
@@ -307,7 +311,7 @@ def output_food_groups():
             print(f"An error occurred: {e}")
 
         # saves data in the output folder
-        with open(directory + food_group, 'w') as output:
+        with open(directory + food_group + ".json", 'w') as output:
             json.dump(group_json, output, indent=4)
 
 
@@ -331,7 +335,7 @@ def clean_data(json_data):
     foods_only_data = {'foods': [item for item in json_data.get('foods', [])]}
 
     for entry in foods_only_data['foods']:
-        entries_to_delete = ['appendGroups', 'removeGroups']
+        entries_to_delete = ['hungerModifier', 'appendGroups', 'removeGroups']
 
         for deletion in entries_to_delete:
             if deletion in entry:
@@ -344,7 +348,7 @@ def clean_data(json_data):
 
 # Save new Json data
 def output_data(json_file, title):
-    directory = './output/'
+    directory = './output/HungerOverhaul/'
 
     # Checks if output folder exists, else attempts to create one
     try:
