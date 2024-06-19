@@ -298,7 +298,7 @@ def output_food_groups():
 
         for entry in data['foods']:
             if food_group in entry['foodGroups']:
-                item = entry['name'] if entry['meta'] == 0 else f"{entry['name']}:{entry['meta']}"
+                item = f"{entry['name']}:{entry['meta']}"
                 group_json["food"]["items"].append(item)
 
         directory = './output/SpiceOfLife/'
