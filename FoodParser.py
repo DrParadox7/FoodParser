@@ -80,7 +80,7 @@ def get_number_processes(food_name):
                     if 'saturationModifier' in entry:
                         # If entry has numerical saturationModifier, return that
                         if isinstance(entry['saturationModifier'], float):
-                            return entry['saturationModifier']
+                            return max(entry['saturationModifier'], base_saturation)
 
                         # If the entry has a single parent attempt processing:
                         elif isinstance(entry['saturationModifier'], list) and len(entry['saturationModifier']) == 1:
@@ -88,10 +88,10 @@ def get_number_processes(food_name):
                             recursive_first_entry = get_number_processes(first_entry)
 
                             if isinstance(first_entry, float):
-                                return first_entry + base_saturation
+                                return first_entry
 
                             elif isinstance(recursive_first_entry, float):
-                                return get_number_processes(first_entry) + base_saturation
+                                return get_number_processes(first_entry)
     return food_name
 
 
