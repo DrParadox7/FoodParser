@@ -73,13 +73,21 @@ def get_hunger_value(food_name):
                     return entry['hunger']
 
 
-def retrieve_saturation_score(food_name):
+def retrieve_saturation_score(food_name, food_meta):
     if isinstance(food_name, str):
         for group_name, entries in data.items():
 
             for entry in entries:
                 if entry['name'] == food_name:
                     logger.info(f'Found target food {food_name}, processing entry')
+
+                    if 'meta' in entry:
+                        if entry['meta'] != food_meta:
+                            # Entry has a Metadata but doesn't match with our target's. Skipping Entry
+                            continue
+                    elif food_meta > 0:
+                        # Target has a specified Metadata but Entry has no Metadata. Skipping Entry
+                        continue
 
                     if 'saturationModifier' in entry:
                         logger.info(f"Found entries for {food_name}: {entry['saturationModifier']}")
@@ -98,7 +106,9 @@ def retrieve_saturation_score(food_name):
                             else:
                                 for component in entry['saturationModifier']:
                                     if not isinstance(component, float):
-                                        retrieve_saturation_score(component)
+                                        component_name = get_food_name(component)
+                                        component_meta = get_food_meta(component)
+                                        retrieve_saturation_score(component_name, component_meta)
 
                     logger.info(f'Failed to convert {food_name} into numerical')
                     logger.info(f'Could not parse {entry["saturationModifier"]} into numerical value. We will try again later.')
@@ -115,19 +125,53 @@ def translate_hunger_value(lst):
             modified_list.append(food)
     return modified_list
 
+def get_food_name(food):
+    name = food
+
+    # Can be split in 3 parts using ":" (aka contains modID:name:meta)
+    if len(food.rsplit(":")) == 3:
+        # split "modID:name" from "meta"
+        name = food.rsplit(":", 1)[0]
+
+    return name
+
+def get_food_meta(food):
+    meta = 0
+
+    # Can be split in 3 parts using ":" (aka contains modID:name:meta)
+    if len(food.rsplit(":")) == 3:
+        # split "modID:name" from "meta"
+        meta = food.rsplit(":", 1)[1]
+
+    return meta
+
 
 def convert_list_to_numerical_saturation(food_list):
     number_list = []
-    for food in food_list:
-        # Get individual Food Value
-        calculated_value = retrieve_saturation_score(food)
+    for food_entry in food_list:
+        if isinstance(food_entry, str):
+            # Name entry found.Attempting to retrieve its Saturation Value
+            food_name = get_food_name(food_entry)
+            food_meta = get_food_meta(food_entry)
 
-        if isinstance(food, str) and isinstance(calculated_value, float):
-            # Successfully converted Food into saturation score
-            number_list.append(calculated_value)
+            calculated_value = retrieve_saturation_score(food_name, food_meta)
+            if isinstance(calculated_value, float):
+                # Successfully converted Food Entry into saturation score
+                number_list.append(calculated_value)
+
+            else:
+                # Failed to convert Food Entry into saturation score. We'll try again later.
+                number_list.append(food_entry)
+
+        elif isinstance(food_entry, float):
+            # Entry is already converted into numerical value
+            number_list.append(food_entry)
+
         else:
-            # Failed to convert Food into saturation score. We'll try again later.
-            number_list.append(food)
+            raise KeyError(
+                logger.info('"foodGroups" Attempted to convert food list with an invalid list.'),
+                logger.info(f"Errored entry: {food_entry} in {food_list}")
+            )
 
 
     return number_list
@@ -283,23 +327,46 @@ def replace_entries(input_list, mapping_dict):
 
     return list(result_set)
 
+def get_food_name_with_meta(entry):
+    food_meta = entry['meta'] if 'meta' in entry else 0
+    return entry['name'] + ":" + str(food_meta)
+
+def initiate_food_group_list_from_ingredients(ingredients):
+    food_group_list = []
+    for entry in ingredients:
+
+        entry_parts = len(entry.rsplit(":"))
+
+        if entry_parts == 3:
+            # Entry contains "modID:name:meta"
+            food_group_list.append(entry)
+        elif entry_parts == 2:
+            # Entry contains "modID:name" but it is missing "meta"
+            food_group_list.append(entry + ":" + str(0))
+        else:
+            raise KeyError(
+                logger.info(f'"hunger" list contains invalid entry: { entry }')
+            )
+
+
+    return food_group_list
 
 def process_food_groups(json_data, iterations):
     processed_group_food = 0
     for group_name, entries in json_data.items():
-        # Save to dictionary
+        # Generate initial food dictionary from entries with an already defined food group
         for entry in entries:
             if 'foodGroups' in entry:
                 if isinstance(entry['foodGroups'], list):
                     if not any(":" in element for element in entry['foodGroups']):
-                        food_dictionary[entry['name']] |= set(entry['foodGroups'])
+                        food_dictionary[get_food_name_with_meta(entry)] |= set(entry['foodGroups'])
 
-        # Create list to be processed into food values
+        # Generate missing list for entries that require it
         for entry in entries:
             if 'foodGroups' not in entry:
                 if 'hunger' in entry:
                     if isinstance(entry['hunger'], list):
-                        entry['foodGroups'] = entry['hunger']
+                        entry['foodGroups'] = initiate_food_group_list_from_ingredients(entry['hunger'])
                     else:
                         entry['foodGroups'] = ['None']
 
