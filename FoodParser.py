@@ -5,6 +5,8 @@ from collections import defaultdict
 
 from timeit import default_timer as timer
 
+open('logs.info', 'w').close()
+
 with open('Raw_FoodValues.json', 'r') as f:
     data = json.load(f)
 
@@ -36,7 +38,7 @@ def count_entries():
     entry_count = (len([entries for entries in data.get('foods', [])]) + len([entries for entries in data.get('ingredients', [])]))
 
 
-def successful_conversion(category):
+def is_conversion_complete(category):
     for group_name, entries in data.items():
         for entry in entries:
 
@@ -71,27 +73,36 @@ def get_hunger_value(food_name):
                     return entry['hunger']
 
 
-def get_number_processes(food_name):
+def retrieve_saturation_score(food_name):
     if isinstance(food_name, str):
         for group_name, entries in data.items():
+
             for entry in entries:
                 if entry['name'] == food_name:
+                    logger.info(f'Found target food {food_name}, processing entry')
 
                     if 'saturationModifier' in entry:
+                        logger.info(f"Found entries for {food_name}: {entry['saturationModifier']}")
+
                         # If entry has numerical saturationModifier, return that
                         if isinstance(entry['saturationModifier'], float):
-                            return max(entry['saturationModifier'], base_saturation)
+                            logger.info(f'Entry is already numerical. Using that')
+                            return float(max(entry['saturationModifier'], base_saturation))
 
-                        # If the entry has a single parent attempt processing:
-                        elif isinstance(entry['saturationModifier'], list) and len(entry['saturationModifier']) == 1:
-                            first_entry = entry['saturationModifier'][0]
-                            recursive_first_entry = get_number_processes(first_entry)
 
-                            if isinstance(first_entry, float):
-                                return first_entry
+                        # If the entry has saturation Modifier as list
+                        if isinstance(entry['saturationModifier'], list):
+                            logger.info(f"Entry is list...")
+                            if all(isinstance(element, float) for element in entry['saturationModifier']):
+                                finalize_saturation_score(entry)
+                            else:
+                                for component in entry['saturationModifier']:
+                                    if not isinstance(component, float):
+                                        retrieve_saturation_score(component)
 
-                            elif isinstance(recursive_first_entry, float):
-                                return get_number_processes(first_entry)
+                    logger.info(f'Failed to convert {food_name} into numerical')
+                    logger.info(f'Could not parse {entry["saturationModifier"]} into numerical value. We will try again later.')
+
     return food_name
 
 
@@ -105,15 +116,59 @@ def translate_hunger_value(lst):
     return modified_list
 
 
-def convert_to_saturation_score(lst):
-    modified_list = []
-    for food in lst:
-        calculated_value = get_number_processes(food)
+def convert_list_to_numerical_saturation(food_list):
+    number_list = []
+    for food in food_list:
+        # Get individual Food Value
+        calculated_value = retrieve_saturation_score(food)
+
         if isinstance(food, str) and isinstance(calculated_value, float):
-            modified_list.append(calculated_value)
+            # Successfully converted Food into saturation score
+            number_list.append(calculated_value)
         else:
-            modified_list.append(food)
-    return modified_list
+            # Failed to convert Food into saturation score. We'll try again later.
+            number_list.append(food)
+
+
+    return number_list
+
+
+def finalize_saturation_score(entry):
+    Bonus = bonus_saturation
+
+    # For Debug Purposes
+    entry['componentSaturations'] = entry['saturationModifier']
+    #####
+
+    # Top Saturation Score in list
+    top_score = max(entry['saturationModifier'])
+
+    # Factor in Minimum Saturation and Saturation Bonuses
+    if 'type' in entry and entry['type'] in incompatible_with_saturation_bonus:
+        Bonus = 0
+
+    final_score = max(top_score, base_saturation) + Bonus
+
+    entry['saturationModifier'] = float(round(final_score, 1))
+
+def sanitize_saturation_entries(json_data):
+    for group_name, entries in json_data.items():
+        for entry in entries:
+            if 'saturationModifier' not in entry:
+
+                # Entry does not have a SaturationModifier prepared.
+                if 'hunger' in entry:
+
+                    # Compute [saturationModifier] from ingredient list in [hunger]
+                    if isinstance(entry['hunger'], list):
+                        entry['saturationModifier'] = entry['hunger']
+
+                        # Debug Entry Things - ignore
+                        entry['componentItems'] = entry['hunger']
+
+                    else:
+                        # SaturationModifier set to default
+                        entry['saturationModifier'] = base_saturation
 
 
 def process_saturation_entries(json_data, iterations):
@@ -121,34 +176,48 @@ def process_saturation_entries(json_data, iterations):
 
     for group_name, entries in json_data.items():
         for entry in entries:
-            if 'saturationModifier' not in entry:
 
-                if 'hunger' in entry:
-                    if isinstance(entry['hunger'], list):
-                        entry['saturationModifier'] = entry['hunger']
+            # Found manually compiled numerical entry without decimal. We'll use that
+            if isinstance(entry['saturationModifier'], int):
+                entry['saturationModifier'] = float(entry['saturationModifier'])
+
+            # Found an instance of 'saturationModifier' in an inconverted state
+            elif isinstance(entry['saturationModifier'], list):
+                logger.info(f"Found List: {entry['saturationModifier']}")
+
+
+                # Check if conversion was complete to attempt finalization.
+                if all(isinstance(element, float) for element in entry['saturationModifier']):
+                    # Finalizing ['saturationModifier']
+                    finalize_saturation_score(entry)
+                    logger.info(f"Successfully processed Entry {entry['name']}.")
+
+                    processed_entries_saturation += 1
+
+                # Attempt numeric conversion for ['saturationModifier'] if needed
+                if isinstance(entry['saturationModifier'], list):
+                    if not all(isinstance(element, float) for element in entry['saturationModifier']):
+                        # Converting ['saturationModifier'] list into numerical values. . .
+                        for element in entry['saturationModifier']:
+                            if not isinstance(element, float):
+                                entry['saturationModifier'] = convert_list_to_numerical_saturation(
+                                    entry['saturationModifier'])
                     else:
-                        entry['saturationModifier'] = 0
-            else:
-                if isinstance(entry['saturationModifier'], int) and 'hunger' in entry and isinstance(entry['hunger'], int):
-                    continue
+                        logger.info(f"List is NOT numeric")
 
-                if isinstance(entry['saturationModifier'], list):
 
-                    if all(isinstance(element, float) for element in entry['saturationModifier']):
+                # Check conversion status for entry
+                if not isinstance(entry['saturationModifier'], float):
+                    logger.info(
+                        f"Incomplete process Entry for {entry['name']}. Contains: {entry['saturationModifier']}.")
 
-                        Bonus = bonus_saturation if not ('type' in entry and entry['type'] in incompatible_with_saturation_bonus) else 0
-
-                        entry['saturationModifier'] = max(round(max(entry['saturationModifier']) + Bonus, 1), base_saturation)
-
-                        processed_entries_saturation += 1
-
-                if isinstance(entry['saturationModifier'], list):
-
-                    if any(isinstance(element, str) for element in entry['saturationModifier']):
-                        entry['saturationModifier'] = convert_to_saturation_score(entry['saturationModifier'])
+            elif not isinstance(entry['saturationModifier'], float):
+                logger.info(f'Found invalid saturationModifier for {entry["name"]}')
+                logger.info(f'Type = {type(entry["name"])}')
 
     logger.info(f'Processed {processed_entries_saturation} saturation entries this cycle.')
-    if successful_conversion('saturationModifier'):
+
+    if is_conversion_complete('saturationModifier'):
         logger.info(f'Success!')
         logger.info(f'Completed saturation entries in {iterations} cycles')
     else:
@@ -182,15 +251,15 @@ def process_hunger_entries(json_data, iterations):
 
     logger.info(f'Processed {processed_entries_hunger} hunger entries this cycle.')
 
-    if successful_conversion('hunger'):
+    if is_conversion_complete('hunger'):
         logger.info(f'Success!')
         logger.info(f'Completed hunger entries in {iterations} cycles')
     else:
-        logger.info('Continuing...')
+        logger.info(f'Conversion incomplete. Continuing...')
         process_hunger_entries(json_data, iterations+1)
 
 
-def successful_group_food_conversion():
+def successful_food_groups_conversion():
     for group_name, entries in data.items():
         for entry in entries:
             if 'foodGroups' not in entry or not isinstance(entry['foodGroups'], list) or any(":" in element for element in entry['foodGroups']):
@@ -258,7 +327,7 @@ def process_food_groups(json_data, iterations):
 
     logger.info(f'Processed {processed_group_food} food group entries this cycle.')
 
-    if successful_group_food_conversion():
+    if successful_food_groups_conversion():
         logger.info(f'Success!')
         logger.info(f'Completed foodGroups entries in {iterations} cycles')
     else:
@@ -266,7 +335,7 @@ def process_food_groups(json_data, iterations):
         process_food_groups(json_data, iterations+1)
 
 
-def output_food_groups():
+def export_food_groups():
     food_groups = set()
     colors = {
         "Beverages": "dark_aqua",
@@ -321,9 +390,39 @@ def get_total_food_points():
     for entry in data['foods']:
         total_foodpoints += entry["hunger"]
 
+def get_number_foods_per_quality(index):
+    count = 0
+
+    if index == 0:
+        for entry in data['foods']:
+            if 0.6 > entry['saturationModifier']:
+                count += 1
+    if index == 1:
+        for entry in data['foods']:
+            if 1.2 > entry['saturationModifier'] >= 0.6:
+                count += 1
+
+    if index == 2:
+        for entry in data['foods']:
+            if 1.8 > entry['saturationModifier'] >= 1.2:
+                count += 1
+
+    if index == 3:
+        for entry in data['foods']:
+            if 2.4 > entry['saturationModifier'] >= 1.8:
+                count += 1
+    if index == 4:
+        for entry in data['foods']:
+            if entry['saturationModifier'] >= 2.4:
+                count += 1
+
+    return count
+
+
 
 def initiate(json_data):
     process_food_groups(json_data, 0)
+    sanitize_saturation_entries(json_data)
     process_saturation_entries(json_data, 0)
     process_hunger_entries(json_data, 0)
 
@@ -335,7 +434,7 @@ def clean_data(json_data):
     foods_only_data = {'foods': [item for item in json_data.get('foods', [])]}
 
     for entry in foods_only_data['foods']:
-        entries_to_delete = ['hungerModifier', 'appendGroups', 'removeGroups']
+        entries_to_delete = ['foodGroups', 'hungerModifier', 'appendGroups', 'removeGroups', 'componentItems', 'componentSaturations', 'type']
 
         for deletion in entries_to_delete:
             if deletion in entry:
@@ -365,8 +464,9 @@ def output_data(json_file, title):
 count_entries()
 initiate(data)
 get_total_food_points()
-output_food_groups()
+export_food_groups()
 
+output_data(data, 'DEBUG-Food Values.json')
 output_data(clean_data(data), 'Food Values.json')
 
 end = timer()
@@ -374,3 +474,8 @@ end = timer()
 print('Completed!')
 print('Processed ' + str(entry_count) + ' food entries in ' + str(round(end - start, 3)) + ' seconds')
 print(f'Total food points: {total_foodpoints}')
+print(f'Poor Foods (<0.2): {get_number_foods_per_quality(0)}')
+print(f'Low Foods (<0.6): {get_number_foods_per_quality(1)}')
+print(f'Normal Foods (<1.2): {get_number_foods_per_quality(2)}')
+print(f'Good Foods (<1.8): {get_number_foods_per_quality(3)}')
+print(f'Great Foods (+2.4): {get_number_foods_per_quality(4)}')
