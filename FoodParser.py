@@ -187,13 +187,16 @@ def finalize_saturation_score(entry):
     # Top Saturation Score in list
     top_score = max(entry['saturationModifier'])
 
+    final_score = max(top_score, base_saturation)
+
     # Factor in Minimum Saturation and Saturation Bonuses
     if 'type' in entry and entry['type'] in incompatible_with_saturation_bonus:
         Bonus = 0
+    else:
+        if final_score < 0.6:
+            Bonus = 0.4
 
-    final_score = max(top_score, base_saturation) + Bonus
-
-    entry['saturationModifier'] = float(round(final_score, 1))
+    entry['saturationModifier'] = float(round(final_score + Bonus, 1))
 
 def sanitize_saturation_entries(json_data):
     for group_name, entries in json_data.items():
